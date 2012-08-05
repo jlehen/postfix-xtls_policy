@@ -13,6 +13,18 @@
 /*	char *tls_issuer_CN(peercert)
 /*	X509   *peercert;
 /*
+/*	char *tls_peer_DN(peercert)
+/*	X509   *peercert;
+/*
+/*	char *tls_issuer_DN(peercert)
+/*	X509   *peercert;
+/*
+/*	long tls_serial_number(peercert)
+/*	X509   *peercert;
+/*
+/*	long tls_emails(peercert)
+/*	X509   *peercert;
+/*
 /*	int	tls_verify_certificate_callback(ok, ctx)
 /*	int	ok;
 /*	X509_STORE_CTX *ctx;
@@ -26,6 +38,27 @@
 /*	certificate issuer, or a null pointer if no CommonName was
 /*	found. The result is allocated with mymalloc() and must be
 /*	freed by the caller.
+/*
+/*	tls_peer_DN() returns the full text for the peer
+/*	certificate subject, or a null pointer if no CommonName was
+/*	found. The result is allocated with mymalloc() and must be
+/*	freed by the caller.
+/*
+/*	tls_issuer_DN() returns the full text for the peer
+/*	certificate issuer, or a null pointer if no CommonName was
+/*	found. The result is allocated with mymalloc() and must be
+/*	freed by the caller.
+/*
+/*	tls_serial_number() returns the serial number of the peer 
+/*	certificate, or a null pointer if there was insufficient
+/*	memory. The result is allocated with mymalloc() and must be
+/*	freed by the caller.
+/*
+/*	tls_emails() returns a comma-separated list of e-mail addresses
+/*	contained in either the subject or subjectAltName X509
+/*	extension, or a null pointer if there was no address or
+/*	insufficient memory for OpenSSL. The result is allocated with
+/*	mymalloc() and must be freebsd bu the caller.
 /*
 /*	tls_verify_callback() is called several times (directly or
 /*	indirectly) from crypto/x509/x509_vfy.c. It is called as
@@ -189,6 +222,64 @@ int     tls_verify_certificate_callback(int ok, X509_STORE_CTX *ctx)
 	return (1);
 }
 
+/* tls_entry_to_utf8() - ... */
+
+static char *tls_entry_to_utf8(X509_NAME_ENTRY *entry,
+			       const char *label, const char *field)
+{
+    int     len;
+    ASN1_STRING *entry_str;
+    unsigned char *tmp;
+    char   *fieldsep;
+    char   *result;
+
+    fieldsep = " ";
+    if (field == 0) { 
+	field = "";
+	fieldsep = "";
+    }
+
+    if ((entry_str = X509_NAME_ENTRY_get_data(entry)) == 0) {
+	/* This should not happen */
+	msg_warn("error reading peer certificate %s%s%s data",
+		 label, fieldsep, field);
+	tls_print_errors();
+	return (0);
+    }
+
+    if ((len = ASN1_STRING_to_UTF8(&tmp, entry_str)) < 0) {
+	/* This should not happen */
+	msg_warn("error decoding peer certificate %s%s%s data",
+		 label, fieldsep, field);
+	tls_print_errors();
+	return (0);
+    }
+
+    /*
+     * Since the peer CN is used in peer verification, take care to detect
+     * truncation due to excessive length or internal NULs.
+     */
+    if (len >= CCERT_BUFSIZ) {
+	OPENSSL_free(tmp);
+	msg_warn("peer %s%s%s too long: %d", label, fieldsep, field, (int) len);
+	return (0);
+    }
+
+    /*
+     * Standard UTF8 does not encode NUL as 0b11000000, that is
+     * a Java "feature". So we need to check for embedded NULs.
+     */
+    if (strlen((char *) tmp) != len) {
+	msg_warn("internal NUL in peer %s%s%s", label, fieldsep, field);
+	OPENSSL_free(tmp);
+	return (0);
+    }
+
+    result = mystrdup((char *) tmp);
+    OPENSSL_free(tmp);
+    return (result);
+}
+
 #ifndef DONT_GRIPE
 #define DONT_GRIPE 0
 #define DO_GRIPE 1
@@ -198,12 +289,8 @@ int     tls_verify_certificate_callback(int ok, X509_STORE_CTX *ctx)
 
 static char *tls_text_name(X509_NAME *name, int nid, char *label, int gripe)
 {
-    int     len;
     int     pos;
     X509_NAME_ENTRY *entry;
-    ASN1_STRING *entry_str;
-    unsigned char *tmp;
-    char   *result;
 
     if (name == 0
     	|| (pos = X509_NAME_get_index_by_NID(name, nid, -1)) < 0) {
@@ -232,42 +319,79 @@ static char *tls_text_name(X509_NAME *name, int nid, char *label, int gripe)
 	return (0);
     }
 
-    if ((entry_str = X509_NAME_ENTRY_get_data(entry)) == 0) {
-	/* This should not happen */
-	msg_warn("error reading peer certificate %s data", label);
-	tls_print_errors();
-	return (0);
+    return (tls_entry_to_utf8(entry, label, 0));
+}
+
+/* Should handle most of existing subject/issuer names */
+#ifndef CCERT_BIGBUFSIZ
+#define CCERT_BIGBUFSIZ 2048
+#endif
+
+/* tls_text_fullname - ... */
+
+static char *tls_text_fullname(X509_NAME *name, char *label)
+{
+    int     fieldcount;
+    int     lastfield;
+    int     i;
+    char   *result;
+    int     resultcount;	    /* Bytes left in the result buffer */
+    X509_NAME_ENTRY *entry;
+    ASN1_OBJECT *field;
+    int     fldnid;
+    const char *fldbuf;
+    int     fldbuflen;
+    char   *valbuf;
+    int     valbuflen;
+
+    result = mymalloc(CCERT_BIGBUFSIZ);
+    *result = '\0';
+    resultcount = CCERT_BIGBUFSIZ - 1;
+
+    lastfield = 0;
+    fieldcount = X509_NAME_entry_count(name);
+    for (i = fieldcount - 1; i >= 0; i--) {
+	entry = X509_NAME_get_entry(name, i);
+
+	/* First get the field name */
+	field = X509_NAME_ENTRY_get_object(entry);
+	fldnid = OBJ_obj2nid(field);
+	if (fldnid == NID_undef) {
+	    msg_warn("unknown field name when decoding %s", label);
+	    myfree(result);
+	    return (0);
+	}
+	fldbuf = OBJ_nid2sn(fldnid);
+	fldbuflen = (int) strlen(fldbuf);
+
+	/* Then decode the field value */
+	valbuf = tls_entry_to_utf8(entry, label, fldbuf);
+	if (valbuf == 0) {
+	    myfree(result);
+	    return (0);
+	}
+	valbuflen = (int) strlen(valbuf);
+
+	/* Add "field=value," to the result */
+	lastfield = (i == 0) ? 1 : 0;
+	if (fldbuflen + valbuflen + 1 + (lastfield ? 0 : 1) > resultcount) {
+	    msg_warn("peer %s too long", label);
+	    myfree(valbuf);
+	    myfree(result);
+	    return (0);
+	}
+
+	strcat(result, fldbuf);
+	strcat(result, "=");
+	strcat(result, valbuf);
+	resultcount -= fldbuflen + 1 + valbuflen;
+	if (!lastfield) {
+	    strcat(result, ",");
+	    resultcount--;
+	}
+	myfree(valbuf);
     }
 
-    if ((len = ASN1_STRING_to_UTF8(&tmp, entry_str)) < 0) {
-	/* This should not happen */
-	msg_warn("error decoding peer certificate %s data", label);
-	tls_print_errors();
-	return (0);
-    }
-
-    /*
-     * Since the peer CN is used in peer verification, take care to detect
-     * truncation due to excessive length or internal NULs.
-     */
-    if (len >= CCERT_BUFSIZ) {
-	OPENSSL_free(tmp);
-	msg_warn("peer %s too long: %d", label, (int) len);
-	return (0);
-    }
-
-    /*
-     * Standard UTF8 does not encode NUL as 0b11000000, that is
-     * a Java "feature". So we need to check for embedded NULs.
-     */
-    if (strlen((char *) tmp) != len) {
-	msg_warn("internal NUL in peer %s", label);
-	OPENSSL_free(tmp);
-	return (0);
-    }
-
-    result = mystrdup((char *) tmp);
-    OPENSSL_free(tmp);
     return (result);
 }
 
@@ -300,5 +424,85 @@ char   *tls_issuer_CN(X509 *peer)
 			   "issuer Organization", DO_GRIPE);
     return (cn);
 }
+
+/* tls_peer_DN - extract peer full name from certificate */
+
+char   *tls_peer_DN(X509 *peer)
+{
+    char *subject;
+
+    subject = tls_text_fullname(X509_get_subject_name(peer), "subject");
+    return (subject);
+}
+
+/* tls_issuer_DN - extract issuer full name from certificate */
+
+char   *tls_issuer_DN(X509 *peer)
+{
+    char *issuer;
+
+    issuer = tls_text_fullname(X509_get_issuer_name(peer), "issuer");
+    return (issuer);
+}
+
+/* tls_serial_number - extract certificate serial number */
+
+char   *tls_serial_number(X509 *peer)
+{
+    ASN1_INTEGER *sn;
+    BIGNUM bn;
+    char *bnstr, *snstr;
+    size_t len;
+
+    if ((sn = X509_get_serialNumber(peer)) == 0)
+	return (0);
+    BN_init(&bn);
+    ASN1_INTEGER_to_BN(sn, &bn);
+    if ((bnstr = BN_bn2hex(&bn)) == NULL)
+	msg_fatal("insufficient memory for bignum stringification: %m");
+    snstr = mystrdup(bnstr);
+    OPENSSL_free(bnstr);
+    return (snstr);
+}
+
+/* 
+ * tls_emails - extract e-mail addresses contained in either subject
+ * or subjectAltName
+ */
+
+char   *tls_emails(X509 *peer)
+{
+    STACK *stack;
+    size_t len;
+    int i;
+    char *result;
+
+    stack = X509_get1_email(peer);
+    if (M_sk_num(stack) <= 0)
+	return (0);
+
+    /*
+     * Allocate the destination buffer.
+     */
+    for (len = 0, i = 0; i < M_sk_num(stack); i++)
+	len += strlen(M_sk_value(stack, i)) + 2;
+    len -= 1;
+    result = mymalloc(len);	    /* Cannot fail. */
+
+    /*
+     * Concatenate all e-mail addresses, separated by commas.
+     */
+    result[0] = '\0';
+    for (i = 0; i < M_sk_num(stack); i++) {
+	strcat(result, M_sk_value(stack, i));
+	if (i < M_sk_num(stack) - 1)
+	    strcat(result, ", ");
+	OPENSSL_free(M_sk_value(stack, i));
+    }
+    sk_free(stack);
+
+    return result;
+}
+
 
 #endif

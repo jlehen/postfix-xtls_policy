@@ -3295,10 +3295,14 @@ static int check_policy_service(SMTPD_STATE *state, const char *server,
     ATTR_CLNT *policy_clnt;
 
 #ifdef USE_TLS
-    VSTRING *subject_buf;
-    VSTRING *issuer_buf;
-    const char *subject;
-    const char *issuer;
+    VSTRING *subjectCN_buf;
+    VSTRING *subjectDN_buf;
+    VSTRING *issuerCN_buf;
+    VSTRING *issuerDN_buf;
+    const char *subjectCN;
+    const char *subjectDN;
+    const char *issuerCN;
+    const char *issuerDN;
 
 #endif
     int     ret;
@@ -3330,8 +3334,10 @@ static int check_policy_service(SMTPD_STATE *state, const char *server,
 	} \
     } while (0);
 
-    ENCODE_CN(subject, subject_buf, state->tls_context->peer_CN);
-    ENCODE_CN(issuer, issuer_buf, state->tls_context->issuer_CN);
+    ENCODE_CN(subjectCN, subjectCN_buf, state->tls_context->peer_CN);
+    ENCODE_CN(subjectDN, subjectDN_buf, state->tls_context->peer_DN);
+    ENCODE_CN(issuerCN, issuerCN_buf, state->tls_context->issuer_CN);
+    ENCODE_CN(issuerDN, issuerDN_buf, state->tls_context->issuer_DN);
 #endif
 
     if (attr_clnt_request(policy_clnt,
@@ -3379,9 +3385,17 @@ static int check_policy_service(SMTPD_STATE *state, const char *server,
       state->tls_context->peer_verified && ((x) != 0)) ? (x) : "")
 #define IF_ENCRYPTED(x, y) ((state->tls_context && ((x) != 0)) ? (x) : (y))
 			  ATTR_TYPE_STR, MAIL_ATTR_CCERT_SUBJECT,
-			  IF_VERIFIED(subject),
+			  IF_VERIFIED(subjectCN),
+			  ATTR_TYPE_STR, MAIL_ATTR_CCERT_FULL_SUBJECT,
+			  IF_VERIFIED(subjectDN),
 			  ATTR_TYPE_STR, MAIL_ATTR_CCERT_ISSUER,
-			  IF_VERIFIED(issuer),
+			  IF_VERIFIED(issuerCN),
+			  ATTR_TYPE_STR, MAIL_ATTR_CCERT_FULL_ISSUER,
+			  IF_VERIFIED(issuerDN),
+			  ATTR_TYPE_STR, MAIL_ATTR_CCERT_SERIAL_NUMBER,
+			  IF_VERIFIED(state->tls_context->serial_number),
+			  ATTR_TYPE_STR, MAIL_ATTR_CCERT_EMAILS,
+			  IF_VERIFIED(state->tls_context->emails),
 
     /*
      * When directly checking the fingerprint, it is OK if the issuing CA is
@@ -3414,10 +3428,14 @@ static int check_policy_service(SMTPD_STATE *state, const char *server,
 				 reply_class, def_acl);
     }
 #ifdef USE_TLS
-    if (subject_buf)
-	vstring_free(subject_buf);
-    if (issuer_buf)
-	vstring_free(issuer_buf);
+    if (subjectCN_buf)
+	vstring_free(subjectCN_buf);
+    if (subjectDN_buf)
+	vstring_free(subjectDN_buf);
+    if (issuerCN_buf)
+	vstring_free(issuerCN_buf);
+    if (issuerDN_buf)
+	vstring_free(issuerDN_buf);
 #endif
     return (ret);
 }

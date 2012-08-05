@@ -79,7 +79,11 @@ typedef struct {
     char   *cache_type;			/* tlsmgr(8) cache type if enabled */
     char   *serverid;			/* unique server identifier */
     char   *peer_CN;			/* Peer Common Name */
+    char   *peer_DN;			/* Peer Full Name */
     char   *issuer_CN;			/* Issuer Common Name */
+    char   *issuer_DN;			/* Issuer Full Name */
+    char   *serial_number;		/* Certificate Serial Number in ASCII */
+    char   *emails;			/* Lists of e-mail addresses in cert */
     char   *peer_fingerprint;		/* ASCII fingerprint */
     char   *peername;
     int     enforce_verify_errors;
@@ -269,7 +273,11 @@ extern RSA *tls_tmp_rsa_cb(SSL *, int, int);
   * tls_verify.c
   */
 extern char *tls_peer_CN(X509 *);
+extern char *tls_peer_DN(X509 *);
 extern char *tls_issuer_CN(X509 *);
+extern char *tls_issuer_DN(X509 *);
+extern char *tls_serial_number(X509 *);
+extern char *tls_emails(X509 *);
 extern int tls_verify_certificate_callback(int, X509_STORE_CTX *);
 
  /*

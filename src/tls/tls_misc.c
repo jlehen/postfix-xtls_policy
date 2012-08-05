@@ -394,7 +394,11 @@ TLScontext_t *tls_alloc_context(int log_level, const char *peername)
     TLScontext->network_bio = 0;
     TLScontext->serverid = 0;
     TLScontext->peer_CN = 0;
+    TLScontext->peer_DN = 0;
     TLScontext->issuer_CN = 0;
+    TLScontext->issuer_DN = 0;
+    TLScontext->serial_number = 0;
+    TLScontext->emails = 0;
     TLScontext->peer_fingerprint = 0;
     TLScontext->protocol = 0;
     TLScontext->cipher_name = 0;
@@ -426,8 +430,16 @@ void    tls_free_context(TLScontext_t *TLScontext)
 
     if (TLScontext->peer_CN)
 	myfree(TLScontext->peer_CN);
+    if (TLScontext->peer_DN)
+	myfree(TLScontext->peer_DN);
     if (TLScontext->issuer_CN)
 	myfree(TLScontext->issuer_CN);
+    if (TLScontext->issuer_DN)
+	myfree(TLScontext->issuer_DN);
+    if (TLScontext->serial_number)
+	myfree(TLScontext->serial_number);
+    if (TLScontext->emails)
+	myfree(TLScontext->emails);
     if (TLScontext->peer_fingerprint)
 	myfree(TLScontext->peer_fingerprint);
 

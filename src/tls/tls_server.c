@@ -658,6 +658,7 @@ TLScontext_t *tls_server_start(const tls_server_start_props *props)
 	    X509_NAME_oneline(X509_get_issuer_name(peer),
 			      buf, sizeof(buf));
 	    msg_info("issuer=%s", buf);
+	    /* We could display the serial number as well. */
 	}
 	if (X509_digest(peer, EVP_md5(), md, &n) && n > 0) {
 	    TLScontext->peer_fingerprint = mymalloc(n * 3);
@@ -676,8 +677,16 @@ TLScontext_t *tls_server_start(const tls_server_start_props *props)
 	}
 	if ((TLScontext->peer_CN = tls_peer_CN(peer)) == 0)
 	    TLScontext->peer_CN = mystrdup("");
+	if ((TLScontext->peer_DN = tls_peer_DN(peer)) == 0)
+	    TLScontext->peer_DN = mystrdup("");
 	if ((TLScontext->issuer_CN = tls_issuer_CN(peer)) == 0)
 	    TLScontext->issuer_CN = mystrdup("");
+	if ((TLScontext->issuer_DN = tls_issuer_DN(peer)) == 0)
+	    TLScontext->issuer_DN = mystrdup("");
+	if ((TLScontext->serial_number = tls_serial_number(peer)) == 0)
+	    TLScontext->serial_number = mystrdup("");
+	if ((TLScontext->emails = tls_emails(peer)) == 0)
+	    TLScontext->emails = mystrdup("");
 
 	if (props->log_level >= 1) {
 	    if (TLScontext->peer_verified)
